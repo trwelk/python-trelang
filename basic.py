@@ -59,6 +59,70 @@ class Position:
         return Position(self.index, self.line, self.column, self.file_name, self.file_text)
 
 
+# Nodes
+class NumberNode:
+    def __init__(self, token):
+        self.token = token
+
+    def __repr__(self):
+        return f'{self.token}'
+    
+class BinaryOp:
+    def __init__(self, left_node, op_token, right_node):
+        self.left_node = left_node
+        self.op_token = op_token
+        self.right_node = right_node
+
+    def __repr__(self):
+        return f'({self.left_node}, {self.op_token}, {self.right_node})'
+
+# Parser
+class Parser:
+    def __init__(self, tokens):
+        self.tokens = tokens
+        self.token_index = -1
+        self.advance()
+
+    def advance(self):
+        self.token_index += 1
+        if (self.token_index < len(self.tokens)):
+            self.current_token = self.tokens[self.token_index]
+        return self.current_token
+
+    def factor(self):
+        token = self.current_token
+
+        if (token.type in (TT_INT, TT_FLOAT)):
+            self.advance()
+            return NumberNode(token)
+
+    def term(self):
+        left = self.factor()
+
+        while (self.current_token.type in (TT_DIV, TT_MUL)):
+            op = self.current_token
+            self.advance()
+            right = self.factor()
+            left = BinaryOp(left, op, right)
+
+        return left
+
+    def expression(self):
+        left = self.term()
+        while(self.current_token.type in (TT_MINUS, TT_PLUS)):
+            op = self.current_token
+            self.advance()
+            right = self.term()
+            print(op)
+
+            left = BinaryOp(left, op, right)
+
+        return left
+
+    def parse(self):
+        res = self.expression()
+        return res
+
 class Lexer:
     def __init__(self, file_name, text):
         self.file_name = file_name
@@ -122,4 +186,6 @@ class Lexer:
 def run(file_name, text):
     lexer = Lexer(file_name, text)
     tokens, error = lexer.make_tokens()
-    return tokens, error
+
+    parser = Parser(tokens).parse()
+    return parser, error
