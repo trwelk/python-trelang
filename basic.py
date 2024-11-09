@@ -8,30 +8,41 @@ TT_MUL = 'TT_MUL'
 TT_DIV = 'TT_DIV'
 TT_LPAR = 'TT_LPAR'
 TT_RPAR = 'TT_RPAR'
+TT_EOF = 'TT_EOF'
 
 DIGITS = '1234567890'
 
 
 class Error:
-    def __init__(self, error, details, pos_start, pos_end):
+    def __init__(self, error, details, start_position, end_position):
         self.error = error
         self.details = details
-        self.pos_start = pos_start
-        self.pos_end = pos_end
+        self.start_position = start_position
+        self.end_position = end_position
 
     def __as_string__(self):
         result = f'{self.error}: {self.details}\n'
-        result = result + f'File: {self.pos_start.file_name}, Pos:({self.pos_start.line + 1}, {self.pos_start.column})'
+        result = result + f'File: {self.start_position.file_name}, Pos:({self.start_position.line + 1}, {self.start_position.column})'
         return result
 
 class IllegalCharError(Error):
-    def __init__(self, details, pos_start, pos_end):
-        super().__init__('Illegal Character', details, pos_start, pos_end)
+    def __init__(self, details, start_position, end_position):
+        super().__init__('Illegal Character', details, start_position, end_position)
+
+class IllegalSyntaxError(Error):
+    def __init__(self, details, start_position, end_position):
+        super().__init__('Invalid Syntax', details, start_position, end_position)
 
 class Token:
-    def __init__(self, type_, value=None):
+    def __init__(self, type_, value=None, start_position=None, end_position=None):
         self.type = type_
         self.value = value
+        if (start_position != None):
+            self.start_position = start_position.copy()
+            self.end_position = start_position.copy()
+            self.end_position.advance()
+        if (end_position != None):
+            self.end_position = end_position.copy()
 
     def __repr__(self):
         if self.value: return f'{self.type}:{self.value}'
@@ -45,7 +56,7 @@ class Position:
         self.file_name = file_name
         self.file_text = file_text
 
-    def advance(self, current_char):
+    def advance(self, current_char=None):
         self.index += 1
         self.column += 1
 
@@ -90,38 +101,71 @@ class Parser:
         return self.current_token
 
     def factor(self):
+        result = ParseResult()
         token = self.current_token
 
         if (token.type in (TT_INT, TT_FLOAT)):
-            self.advance()
-            return NumberNode(token)
+            result.register(self.advance())
+            return result.success(NumberNode(token))
+
+        return result.failure(IllegalSyntaxError("Invalid Number", token.start_position, token.end_position))
 
     def term(self):
-        left = self.factor()
+        result = ParseResult()
+        left = result.register(self.factor())
+        if result.error:
+            return result
 
         while (self.current_token.type in (TT_DIV, TT_MUL)):
             op = self.current_token
-            self.advance()
-            right = self.factor()
+            result.register(self.advance())
+            right = result.register(self.factor())
+            if result.error:
+                return result
             left = BinaryOp(left, op, right)
 
-        return left
+        return result.success(left)
 
     def expression(self):
-        left = self.term()
+        result = ParseResult()
+        left = result.register(self.term())
         while(self.current_token.type in (TT_MINUS, TT_PLUS)):
             op = self.current_token
-            self.advance()
-            right = self.term()
-            print(op)
+            result.register(self.advance())
+            right = result.register(self.term())
 
             left = BinaryOp(left, op, right)
 
-        return left
+        print(left)
+        return result.success(left)
 
     def parse(self):
         res = self.expression()
+
+        if not res.error == None and self.current_token != TT_EOF:
+            res.failure(IllegalSyntaxError("Error", self.current_token.start_position, self.current_token.end_position))
+
         return res
+
+class ParseResult:
+    def __init__(self):
+        self.error = None
+        self.node = None
+
+    def register(self, result):
+        if isinstance(result, ParseResult):
+            if result.error: 
+                self.error = result.error
+            return result.node
+        return result
+
+    def success(self, node):
+        self.node = node
+        return self
+
+    def failure(self, error):
+        self.error = error
+        return self
 
 class Lexer:
     def __init__(self, file_name, text):
@@ -143,49 +187,51 @@ class Lexer:
             elif (self.current_char in DIGITS):
                 tokens.append(self.make_num())
             elif (self.current_char == '+'):
-                tokens.append(Token(TT_PLUS))
+                tokens.append(Token(TT_PLUS, None, self.pos))
                 self.advance()
             elif (self.current_char == '-'):
-                tokens.append(Token(TT_MINUS))
+                tokens.append(Token(TT_MINUS, None, self.pos))
                 self.advance()
             elif (self.current_char == '*'):
-                tokens.append(Token(TT_MUL))
+                tokens.append(Token(TT_MUL, None, self.pos))
                 self.advance()
             elif (self.current_char == '/'):
-                tokens.append(Token(TT_DIV))
+                tokens.append(Token(TT_DIV, None, self.pos))
                 self.advance()
             elif (self.current_char == '('):
-                tokens.append(Token(TT_LPAR))
+                tokens.append(Token(TT_LPAR, None, self.pos))
                 self.advance()
             elif (self.current_char == ')'):
-                tokens.append(Token(TT_RPAR))
+                tokens.append(Token(TT_RPAR, None, self.pos))
                 self.advance()
             else:
-                pos_start = self.pos.copy()
+                start_position = self.pos.copy()
                 char = self.current_char
                 self.advance()
-                return [], IllegalCharError("'" + char + "'", pos_start, self.pos)
+                return [], IllegalCharError("'" + char + "'", start_position, self.pos)
 
+        tokens.append(Token(TT_EOF, start_position=self.pos))
         return tokens, None
 
     def make_num(self):
         num_str = ''
         is_float = False
-
+        start_position = self.pos.copy()
         while (self.current_char != None and self.current_char in DIGITS + '.'):
             num_str += self.current_char
             self.advance()
             if (self.current_char == '.'):
                 is_float = True
 
+        end_position = self.pos.copy()
         if (is_float):
-            return Token(TT_FLOAT, float(num_str))
+            return Token(TT_FLOAT, float(num_str), start_position, end_position)
         else:
-            return Token(TT_INT, int(num_str))
+            return Token(TT_INT, int(num_str), start_position, end_position)
 
 def run(file_name, text):
     lexer = Lexer(file_name, text)
     tokens, error = lexer.make_tokens()
 
     parser = Parser(tokens).parse()
-    return parser, error
+    return parser.node, parser.error
